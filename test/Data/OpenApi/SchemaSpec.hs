@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE QuasiQuotes #-}
 module Data.OpenApi.SchemaSpec where
 
@@ -115,6 +116,9 @@ spec = do
   describe "Bounded Enum key mapping" $ do
     context "ButtonImages" $ checkToSchema (Proxy :: Proxy ButtonImages) buttonImagesSchemaJSON
     context "TimeOfDay" $ checkToSchema (Proxy :: Proxy Data.Time.LocalTime.TimeOfDay) timeOfDaySchemaJSON
+  describe "rejectUnknownFields" $ do
+    describe "disabled" $ checkToSchema (Proxy @AdditionalPropertiesYes) additionalPropYesSchema
+    describe "enabled" $ checkToSchema (Proxy @AdditionalPropertiesNo) additionalPropNoSchema
 
 main :: IO ()
 main = hspec spec

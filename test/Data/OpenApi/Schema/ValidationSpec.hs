@@ -4,6 +4,7 @@
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.OpenApi.Schema.ValidationSpec where
 
@@ -40,6 +41,8 @@ import           Data.OpenApi
 import           Data.OpenApi.Declare
 import           Data.OpenApi.Aeson.Compat (stringToKey)
 
+import           Data.OpenApi.CommonTestTypes
+  (AdditionalPropertiesYes, AdditionalPropertiesNo)
 import           Test.Hspec
 import           Test.Hspec.QuickCheck
 import           Test.QuickCheck
@@ -49,11 +52,17 @@ shouldValidate :: (ToJSON a, ToSchema a) => Proxy a -> a -> Bool
 shouldValidate _ x = validateToJSON x == []
 
 shouldValidateValue :: (ToSchema a) => Proxy a -> Value -> Expectation
-shouldValidateValue px val = do
+shouldValidateValue px val = case validateValue px val of
+  [] -> pure ()
+  errors -> expectationFailure $ unlines errors
+
+shouldNotValidateValue :: (ToSchema a) => Proxy a -> Value -> [String] -> Expectation
+shouldNotValidateValue px val = shouldMatchList (validateValue px val)
+
+validateValue :: (ToSchema a) => Proxy a -> Value -> [String]
+validateValue px val =
   let (defs, sch) = runDeclare (declareSchema px) mempty
-  case validateJSON defs sch val of
-    [] -> pure ()
-    errors -> expectationFailure $ unlines errors
+  in validateJSON defs sch val
 
 shouldNotValidate :: forall a. ToSchema a => (a -> Value) -> a -> Bool
 shouldNotValidate f = not . null . validateJSON defs sch . f
@@ -123,7 +132,19 @@ spec = do
     prop "invalidColorToJSON"         $ shouldNotValidate invalidColorToJSON
     prop "invalidPaintToJSON"         $ shouldNotValidate invalidPaintToJSON
     prop "invalidLightToJSON"         $ shouldNotValidate invalidLightToJSON
-    prop "invalidButtonImagesToJSON"  $ shouldNotValidate invalidButtonImagesToJSON
+    describe "rejectUnknownFields" $ do
+      let val = [aesonQQ|
+        {
+          "prop1" : true,
+          "prop2" : 1,
+          "prop3" : null
+        }
+        |]
+      it "disabled" $
+        shouldValidateValue (Proxy @AdditionalPropertiesYes) val
+      it "enabled" $
+        shouldNotValidateValue (Proxy @AdditionalPropertiesNo) val
+          ["additionalProperties=false but extra property \"prop3\" found"]
 
 main :: IO ()
 main = hspec spec

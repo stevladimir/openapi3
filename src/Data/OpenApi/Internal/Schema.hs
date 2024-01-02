@@ -1041,6 +1041,7 @@ gproductSchema opts proxy = do
       & minItems ?~ sz
     _ -> mempty
       & type_ ?~ OpenApiObject
+      & additionalProperties .~ noAdditionalProperties opts
       & properties .~ foldl' (flip insProp) mempty recordFields
       & required .~ requiredProps
 
@@ -1113,6 +1114,7 @@ gsumConToSchemaWith ref opts _ = case schema of
           -- If it is not a record, we need to put subschema into "contents" field.
           _ | not isRecord -> Inline $ mempty
             & type_ ?~ OpenApiObject
+            & additionalProperties .~ noAdditionalProperties opts
             & required .~ [T.pack tagField]
             & properties . at (T.pack tagField) ?~ tagString
               -- If constructor is nullary, there is no content.
@@ -1124,6 +1126,7 @@ gsumConToSchemaWith ref opts _ = case schema of
           _ -> Inline $ mempty
             & allOf ?~ [Inline $ mempty
               & type_ ?~ OpenApiObject
+              & additionalProperties .~ noAdditionalProperties opts
               & required .~ (T.pack tagField : if isRecord then [] else [T.pack contentsField])
               & properties . at (T.pack tagField) ?~ tagString]
             & if isRecord
@@ -1132,6 +1135,8 @@ gsumConToSchemaWith ref opts _ = case schema of
       UntaggedValue -> refOrEnum -- Aeson encodes nullary constructors as strings in this case.
       ObjectWithSingleField -> Inline $ mempty
         & type_ ?~ OpenApiObject
+        -- This is how "aeson" behaves
+        & additionalProperties ?~ AdditionalPropertiesAllowed False
         & required .~ [tag]
         & properties . at tag ?~ refOrNullary
       TwoElemArray -> Inline $ mempty
@@ -1191,6 +1196,13 @@ instance {-# OVERLAPPABLE #-} AllNullaryConstructors (C1 c f) where
 
 instance {-# OVERLAPPING #-} (Constructor c) => AllNullaryConstructors (C1 c U1) where
   nullaryConstructorsNames _ = Just [conName $ Proxy3 @c @_ @_]
+
+noAdditionalProperties :: SchemaOptions -> Maybe AdditionalProperties
+noAdditionalProperties opts = do
+  -- Missing 'additionalProperties' serve as set to 'true',
+  -- so we set this only when 'rejectUnknownFields' is 'false'.
+  guard $ rejectUnknownFields opts
+  Just $ AdditionalPropertiesAllowed False
 
 {- $setup
 >>> import Data.OpenApi

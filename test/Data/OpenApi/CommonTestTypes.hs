@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -1102,3 +1103,68 @@ unsignedIntsSchemaJSON = [aesonQQ|
   "required": ["uint32", "uint64"]
 }
 |]
+
+-- ========================================================================
+-- AdditionalProperties
+-- ========================================================================
+
+data AdditionalPropertiesYes = AdditionalPropertiesYes
+  { prop1 :: Bool
+  , prop2 :: Int
+  } deriving (Generic)
+instance ToSchema AdditionalPropertiesYes
+
+additionalPropYesSchema :: Value
+additionalPropYesSchema = [aesonQQ|
+{
+    "type": "object",
+    "properties": {
+        "prop1": {
+            "type": "boolean"
+        },
+        "prop2": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+        }
+    },
+    "required": [
+        "prop1",
+        "prop2"
+    ]
+}
+|]
+
+data AdditionalPropertiesNo = AdditionalPropertiesNo
+  { prop1 :: Bool
+  , prop2 :: Int
+  } deriving (Generic)
+instance ToSchema AdditionalPropertiesNo where
+  declareNamedSchema = genericDeclareNamedSchema
+    defaultSchemaOptions{Data.OpenApi.rejectUnknownFields = True}
+
+additionalPropNoSchema :: Value
+additionalPropNoSchema = [aesonQQ|
+{
+    "type": "object",
+    "properties": {
+        "prop1": {
+            "type": "boolean"
+        },
+        "prop2": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+        }
+    },
+    "required": [
+        "prop1",
+        "prop2"
+    ],
+    "additionalProperties": false
+}
+|]
+
+--------------------------
+--------------------------
+--------------------------

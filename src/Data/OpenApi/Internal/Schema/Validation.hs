@@ -412,20 +412,13 @@ validateObject o = withSchema $ \sch ->
 
     validateProps = withSchema $ \sch -> do
       for_ (objectToList o) $ \(keyToText -> k, v) ->
-        case v of
-          Null | not (k `elem` (sch ^. required)) -> valid  -- null is fine for non-required property
-          _ ->
-            case InsOrdHashMap.lookup k (sch ^. properties) of
-              Nothing -> checkMissing (unknownProperty k) additionalProperties $ validateAdditional k v
-              Just s  -> validateWithSchemaRef s v
+        case InsOrdHashMap.lookup k (sch ^. properties) of
+          Nothing -> checkMissing valid additionalProperties $ validateAdditional k v
+          Just s  -> validateWithSchemaRef s v
 
     validateAdditional _ _ (AdditionalPropertiesAllowed True) = valid
     validateAdditional k _ (AdditionalPropertiesAllowed False) = invalid $ "additionalProperties=false but extra property " <> show k <> " found"
     validateAdditional _ v (AdditionalPropertiesSchema s) = validateWithSchemaRef s v
-
-    unknownProperty :: Text -> Validation s a
-    unknownProperty pname = invalid $
-      "property " <> show pname <> " is found in JSON value, but it is not mentioned in Swagger schema"
 
 validateEnum :: Value -> Validation Schema ()
 validateEnum val = do
