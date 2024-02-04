@@ -1049,10 +1049,10 @@ type RecordField = (T.Text, Bool, Referenced Schema)
 
 class GProductSchemas f where
   -- | Collect fields names
-   gproductSchemas
-     :: SchemaOptions
-     -> Proxy f
-     -> Declare (Definitions Schema) ([RecordField], [Referenced Schema])
+  gproductSchemas
+    :: SchemaOptions
+    -> Proxy f
+    -> Declare (Definitions Schema) ([RecordField], [Referenced Schema])
 
 instance (GProductSchemas f, GProductSchemas g) => GProductSchemas (f :*: g) where
   gproductSchemas opts _ = do
