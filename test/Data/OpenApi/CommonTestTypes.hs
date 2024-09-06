@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE QuasiQuotes         #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -7,7 +8,9 @@ module Data.OpenApi.CommonTestTypes where
 import           Prelude               ()
 import           Prelude.Compat
 
-import           Data.Aeson            (ToJSON (..), ToJSONKey (..), Value)
+import           Data.Aeson            (FromJSON(..), ToJSON (..), ToJSONKey (..), Value)
+import qualified Data.Aeson            as Aeson
+import qualified Data.Aeson.Types      as Aeson
 import           Data.Aeson.QQ.Simple
 import           Data.Aeson.Types      (toJSONKeyText)
 import           Data.Char
@@ -28,13 +31,48 @@ data Unit = Unit deriving (Generic)
 instance ToParamSchema Unit
 instance ToSchema Unit
 
-unitSchemaJSON :: Value
-unitSchemaJSON = [aesonQQ|
+unitParamSchemaJSON :: Value
+unitParamSchemaJSON = [aesonQQ|
 {
   "type": "string",
   "enum": ["Unit"]
 }
 |]
+
+unitSchemaJSON :: Value
+unitSchemaJSON = [aesonQQ|
+{
+  "type": "array",
+  "items": {},
+  "maxItems": 0,
+  "example": []
+}
+|]
+
+data UnitTagged = UnitTagged
+  deriving (Generic)
+
+instance ToSchema UnitTagged where
+  declareNamedSchema = genericDeclareNamedSchema
+    defaultSchemaOptions{Data.OpenApi.tagSingleConstructors = True}
+
+instance FromJSON UnitTagged where
+  parseJSON = Aeson.genericParseJSON Aeson.defaultOptions{Aeson.tagSingleConstructors = True}
+
+instance ToJSON UnitTagged where
+  toJSON = Aeson.genericToJSON Aeson.defaultOptions{Aeson.tagSingleConstructors = True}
+
+unitTaggedSchemaJSON :: Value
+unitTaggedSchemaJSON = [aesonQQ|
+{
+  "enum":
+    [
+      "UnitTagged"
+    ],
+   "type": "string"
+}
+|]
+
 
 -- ========================================================================
 -- Color (enum)
@@ -278,7 +316,7 @@ instance ToSchema Character
 characterSchemaJSON :: Value
 characterSchemaJSON = [aesonQQ|
 {
-  "oneOf": [
+  "anyOf": [
     {
       "required": [
         "tag",
@@ -329,7 +367,7 @@ characterSchemaJSON = [aesonQQ|
 characterInlinedSchemaJSON :: Value
 characterInlinedSchemaJSON = [aesonQQ|
 {
-  "oneOf": [
+  "anyOf": [
     {
       "required": [
         "tag",
@@ -415,7 +453,7 @@ characterInlinedSchemaJSON = [aesonQQ|
 characterInlinedPlayerSchemaJSON :: Value
 characterInlinedPlayerSchemaJSON = [aesonQQ|
 {
-  "oneOf": [
+  "anyOf": [
     {
       "required": [
         "tag",
@@ -644,7 +682,7 @@ instance ToSchema Light where
 lightSchemaJSON :: Value
 lightSchemaJSON = [aesonQQ|
 {
-  "oneOf": [
+  "anyOf": [
     {
       "required": [
         "tag"
@@ -726,7 +764,7 @@ lightSchemaJSON = [aesonQQ|
 lightInlinedSchemaJSON :: Value
 lightInlinedSchemaJSON = [aesonQQ|
 {
-  "oneOf": [
+  "anyOf": [
     {
       "required": [
         "tag"
@@ -935,7 +973,7 @@ predicateSchemaDeclareJSON = [aesonQQ|
 [
   {
     "Predicate": {
-      "oneOf": [
+      "anyOf": [
         {
           "properties": {
             "contents": { "$ref": "#/components/schemas/Noun" },
@@ -976,7 +1014,7 @@ predicateSchemaDeclareJSON = [aesonQQ|
       "type": "object"
     },
     "Modifier": {
-      "oneOf": [
+      "anyOf": [
         {
           "properties": {
             "contents": { "$ref": "#/components/schemas/Noun" },
@@ -1065,3 +1103,68 @@ unsignedIntsSchemaJSON = [aesonQQ|
   "required": ["uint32", "uint64"]
 }
 |]
+
+-- ========================================================================
+-- AdditionalProperties
+-- ========================================================================
+
+data AdditionalPropertiesYes = AdditionalPropertiesYes
+  { prop1 :: Bool
+  , prop2 :: Int
+  } deriving (Generic)
+instance ToSchema AdditionalPropertiesYes
+
+additionalPropYesSchema :: Value
+additionalPropYesSchema = [aesonQQ|
+{
+    "type": "object",
+    "properties": {
+        "prop1": {
+            "type": "boolean"
+        },
+        "prop2": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+        }
+    },
+    "required": [
+        "prop1",
+        "prop2"
+    ]
+}
+|]
+
+data AdditionalPropertiesNo = AdditionalPropertiesNo
+  { prop1 :: Bool
+  , prop2 :: Int
+  } deriving (Generic)
+instance ToSchema AdditionalPropertiesNo where
+  declareNamedSchema = genericDeclareNamedSchema
+    defaultSchemaOptions{Data.OpenApi.rejectUnknownFields = True}
+
+additionalPropNoSchema :: Value
+additionalPropNoSchema = [aesonQQ|
+{
+    "type": "object",
+    "properties": {
+        "prop1": {
+            "type": "boolean"
+        },
+        "prop2": {
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+        }
+    },
+    "required": [
+        "prop1",
+        "prop2"
+    ],
+    "additionalProperties": false
+}
+|]
+
+--------------------------
+--------------------------
+--------------------------

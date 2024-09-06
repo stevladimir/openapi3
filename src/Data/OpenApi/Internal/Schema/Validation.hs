@@ -28,8 +28,8 @@ import           Prelude                             ()
 import           Prelude.Compat
 
 import           Control.Applicative
-import           Control.Lens                        hiding (allOf)
-import           Control.Monad                       (forM, forM_, when)
+import           Control.Lens                        hiding (allOf, anyOf)
+import           Control.Monad                       (foldM, forM, forM_, when)
 
 import           Data.Aeson                          hiding (Result)
 #if MIN_VERSION_aeson(2,0,0)
@@ -412,20 +412,13 @@ validateObject o = withSchema $ \sch ->
 
     validateProps = withSchema $ \sch -> do
       for_ (objectToList o) $ \(keyToText -> k, v) ->
-        case v of
-          Null | not (k `elem` (sch ^. required)) -> valid  -- null is fine for non-required property
-          _ ->
-            case InsOrdHashMap.lookup k (sch ^. properties) of
-              Nothing -> checkMissing (unknownProperty k) additionalProperties $ validateAdditional k v
-              Just s  -> validateWithSchemaRef s v
+        case InsOrdHashMap.lookup k (sch ^. properties) of
+          Nothing -> checkMissing valid additionalProperties $ validateAdditional k v
+          Just s  -> validateWithSchemaRef s v
 
     validateAdditional _ _ (AdditionalPropertiesAllowed True) = valid
     validateAdditional k _ (AdditionalPropertiesAllowed False) = invalid $ "additionalProperties=false but extra property " <> show k <> " found"
     validateAdditional _ v (AdditionalPropertiesSchema s) = validateWithSchemaRef s v
-
-    unknownProperty :: Text -> Validation s a
-    unknownProperty pname = invalid $
-      "property " <> show pname <> " is found in JSON value, but it is not mentioned in Swagger schema"
 
 validateEnum :: Value -> Validation Schema ()
 validateEnum val = do
@@ -481,15 +474,19 @@ inferParamSchemaTypes sch = concat
   ]
 
 validateSchemaType :: Value -> Validation Schema ()
-validateSchemaType val = withSchema $ \sch ->
+validateSchemaType val = withSchema $ \sch -> do
+  let validateSub var = (True <$ validateWithSchemaRef var val) <|> (return False)
   case sch of
     (view oneOf -> Just variants) -> do
-      res <- forM variants $ \var ->
-        (True <$ validateWithSchemaRef var val) <|> (return False)
+      res <- forM variants validateSub
       case length $ filter id res of
         0 -> invalid $ "Value not valid under any of 'oneOf' schemas: " ++ show val
         1 -> valid
         _ -> invalid $ "Value matches more than one of 'oneOf' schemas: " ++ show val
+    (view anyOf -> Just variants) -> do
+      res <- foldM (\res var -> if res then pure res else validateSub var) False variants
+      if res then valid else
+        invalid $ "Value does not match any of 'anyOf' schemas: " ++ show val
     (view allOf -> Just variants) -> do
       -- Default semantics for Validation Monad will abort when at least one
       -- variant does not match.

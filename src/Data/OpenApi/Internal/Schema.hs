@@ -16,7 +16,6 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 -- For TypeErrors
 {-# OPTIONS_GHC -Wno-unticked-promoted-constructors #-}
 module Data.OpenApi.Internal.Schema where
@@ -29,12 +28,11 @@ import Data.Data.Lens (template)
 
 import Control.Applicative ((<|>))
 import Control.Monad
-import Control.Monad.Writer hiding (First, Last)
 import Data.Aeson (Object (..), SumEncoding (..), ToJSON (..), ToJSONKey (..),
                    ToJSONKeyFunction (..), Value (..))
 import Data.Char
 import Data.Data (Data)
-import Data.Foldable (traverse_)
+import Data.Foldable (foldl', traverse_)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HashMap
 import           "unordered-containers" Data.HashSet (HashSet)
@@ -65,7 +63,7 @@ import Numeric.Natural.Compat (Natural)
 import Data.Word
 import GHC.Generics
 import qualified Data.UUID.Types as UUID
-import Type.Reflection (Typeable, typeRep)
+import Type.Reflection (Typeable, typeRep, typeOf)
 
 import           Data.OpenApi.Aeson.Compat         (keyToText, objectKeys, toInsOrdHashMap)
 import           Data.OpenApi.Declare
@@ -152,7 +150,7 @@ class Typeable a => ToSchema a where
   -- Note that the schema itself is included in definitions
   -- only if it is recursive (and thus needs its definition in scope).
   declareNamedSchema :: Proxy a -> Declare (Definitions Schema) NamedSchema
-  default declareNamedSchema :: (Generic a, GToSchema (Rep a)) =>
+  default declareNamedSchema :: (GToSchema (Rep a)) =>
     Proxy a -> Declare (Definitions Schema) NamedSchema
   declareNamedSchema = genericDeclareNamedSchema defaultSchemaOptions
 
@@ -589,7 +587,7 @@ sketchStrictSchema = go . toJSON
         names = objectKeys o
 
 class GToSchema (f :: Type -> Type) where
-  gdeclareNamedSchema :: SchemaOptions -> Proxy f -> Schema -> Declare (Definitions Schema) NamedSchema
+  gdeclareNamedSchema :: SchemaOptions -> Proxy f -> Declare (Definitions Schema) NamedSchema
 
 instance {-# OVERLAPPABLE #-} ToSchema a => ToSchema [a] where
   declareNamedSchema _ = do
@@ -633,8 +631,7 @@ instance (ToSchema a, ToSchema b) => ToSchema (Either a b) where
   -- To match Aeson instance
   declareNamedSchema = genericDeclareNamedSchema defaultSchemaOptions { sumEncoding = ObjectWithSingleField }
 
-instance ToSchema () where
-  declareNamedSchema _ = pure (NamedSchema Nothing nullarySchema)
+instance ToSchema ()
 
 -- | For 'ToJSON' instance, see <http://hackage.haskell.org/package/uuid-aeson uuid-aeson> package.
 instance ToSchema UUID.UUID where
@@ -774,14 +771,14 @@ toSchemaBoundedIntegral _ = mempty
 -- | Default generic named schema for @'Bounded'@, @'Integral'@ types.
 genericToNamedSchemaBoundedIntegral :: forall a d f.
   ( Bounded a, Integral a
-  , Generic a, Rep a ~ D1 d f, Datatype d)
+  , Rep a ~ D1 d f, Datatype d)
   => SchemaOptions -> Proxy a -> NamedSchema
 genericToNamedSchemaBoundedIntegral opts proxy
   = genericNameSchema opts proxy (toSchemaBoundedIntegral proxy)
 
 -- | Declare a named schema for a @newtype@ wrapper.
 genericDeclareNamedSchemaNewtype :: forall a d c s i inner.
-  (Generic a, Datatype d, Rep a ~ D1 d (C1 c (S1 s (K1 i inner))))
+  (Datatype d, Rep a ~ D1 d (C1 c (S1 s (K1 i inner))))
   => SchemaOptions                                          -- ^ How to derive the name.
   -> (Proxy inner -> Declare (Definitions Schema) Schema)   -- ^ How to create a schema for the wrapped type.
   -> Proxy a
@@ -873,7 +870,7 @@ toSchemaBoundedEnumKeyMapping :: forall map key value.
 toSchemaBoundedEnumKeyMapping = flip evalDeclare mempty . declareSchemaBoundedEnumKeyMapping
 
 -- | A configurable generic @'Schema'@ creator.
-genericDeclareSchema :: (Generic a, GToSchema (Rep a), Typeable a) =>
+genericDeclareSchema :: (GToSchema (Rep a), Typeable a) =>
   SchemaOptions -> Proxy a -> Declare (Definitions Schema) Schema
 genericDeclareSchema opts proxy = _namedSchemaSchema <$> genericDeclareNamedSchema opts proxy
 
@@ -889,10 +886,10 @@ genericDeclareSchema opts proxy = _namedSchemaSchema <$> genericDeclareNamedSche
 --
 -- >>> _namedSchemaName $ undeclare $ genericDeclareNamedSchema defaultSchemaOptions (Proxy :: Proxy (Either Int Bool))
 -- Just "Either_Int_Bool"
-genericDeclareNamedSchema :: forall a. (Generic a, GToSchema (Rep a), Typeable a) =>
+genericDeclareNamedSchema :: forall a. (GToSchema (Rep a), Typeable a) =>
   SchemaOptions -> Proxy a -> Declare (Definitions Schema) NamedSchema
 genericDeclareNamedSchema opts _ =
-  rename (Just $ T.pack name) <$> gdeclareNamedSchema opts (Proxy :: Proxy (Rep a)) mempty
+  rename (Just $ T.pack name) <$> gdeclareNamedSchema opts (Proxy :: Proxy (Rep a))
   where
     unspace ' ' = '_'
     unspace x = x
@@ -902,7 +899,7 @@ genericDeclareNamedSchema opts _ =
 
 -- | Derive a 'Generic'-based name for a datatype and assign it to a given 'Schema'.
 genericNameSchema :: forall a d f.
-  (Generic a, Rep a ~ D1 d f, Datatype d)
+  (Rep a ~ D1 d f, Datatype d)
   => SchemaOptions -> Proxy a -> Schema -> NamedSchema
 genericNameSchema opts _ = NamedSchema (gdatatypeSchemaName opts (Proxy :: Proxy d))
 
@@ -915,7 +912,7 @@ gdatatypeSchemaName opts _ = case orig of
     name = datatypeNameModifier opts orig
 
 -- | Construct 'NamedSchema' usinng 'ToParamSchema'.
-paramSchemaToNamedSchema :: (ToParamSchema a, Generic a, Rep a ~ D1 d f, Datatype d) =>
+paramSchemaToNamedSchema :: (ToParamSchema a, Rep a ~ D1 d f, Datatype d) =>
   SchemaOptions -> Proxy a -> NamedSchema
 paramSchemaToNamedSchema opts proxy = genericNameSchema opts proxy (paramSchemaToSchema proxy)
 
@@ -929,44 +926,81 @@ nullarySchema = mempty
   & items ?~ OpenApiItemsArray []
 
 gtoNamedSchema :: GToSchema f => SchemaOptions -> Proxy f -> NamedSchema
-gtoNamedSchema opts proxy = undeclare $ gdeclareNamedSchema opts proxy mempty
+gtoNamedSchema opts proxy = undeclare $ gdeclareNamedSchema opts proxy
 
 gdeclareSchema :: GToSchema f => SchemaOptions -> Proxy f -> Declare (Definitions Schema) Schema
-gdeclareSchema opts proxy = _namedSchemaSchema <$> gdeclareNamedSchema opts proxy mempty
+gdeclareSchema opts proxy = _namedSchemaSchema <$> gdeclareNamedSchema opts proxy
 
-instance (GToSchema f, GToSchema g) => GToSchema (f :*: g) where
-  gdeclareNamedSchema opts _ schema = do
-    NamedSchema _ gschema <- gdeclareNamedSchema opts (Proxy :: Proxy f) schema
-    gdeclareNamedSchema opts (Proxy :: Proxy g) gschema
 
-instance (Datatype d, GToSchema f) => GToSchema (D1 d f) where
-  gdeclareNamedSchema opts _ s = rename name <$> gdeclareNamedSchema opts (Proxy :: Proxy f) s
-    where
-      name = gdatatypeSchemaName opts (Proxy :: Proxy d)
+---------------------------
+---------------------------
+---------------------------
+-- TOP LEVEL DISPATCHING --
+---------------------------
+---------------------------
+---------------------------
 
-instance {-# OVERLAPPABLE #-} GToSchema f => GToSchema (C1 c f) where
-  gdeclareNamedSchema opts _ = gdeclareNamedSchema opts (Proxy :: Proxy f)
+-- | Single constructor datatype.
+instance (AllNullaryConstructors (C1 c f), GSumToSchema (C1 c f), GToSchema (C1 c f))
+  => GToSchema (D1 d (C1 c f)) where
+  gdeclareNamedSchema opts _
+    | tagSingleConstructors opts = gsumSchema opts $ Proxy @(C1 c f)
+    | otherwise = gdeclareNamedSchema opts $ Proxy @(C1 c f)
 
-instance {-# OVERLAPPING #-} Constructor c => GToSchema (C1 c U1) where
-  gdeclareNamedSchema = gdeclareNamedSumSchema
+-- | Sum datatype
+instance (AllNullaryConstructors (f :+: g), GSumToSchema (f :+: g))
+  => GToSchema (D1 d (f :+: g)) where
+  gdeclareNamedSchema opts _ = gsumSchema opts $ Proxy @(f :+: g)
 
--- | Single field constructor.
-instance (Selector s, GToSchema f, GToSchema (S1 s f)) => GToSchema (C1 c (S1 s f)) where
-  gdeclareNamedSchema opts _ s
-    | unwrapUnaryRecords opts = fieldSchema
-    | otherwise =
-        case schema ^. items of
-          Just (OpenApiItemsArray [_]) -> fieldSchema
-          _ -> do
-            -- We have to run recordSchema instead of just using its defs,
-            -- since those can be recursive and will lead to infinite loop,
-            -- see https://github.com/biocad/openapi3/pull/37
-            NamedSchema _ schema' <- recordSchema
-            return (unnamed schema')
-    where
-      (_, NamedSchema _ schema) = runDeclare recordSchema mempty
-      recordSchema = gdeclareNamedSchema opts (Proxy :: Proxy (S1 s f)) s
-      fieldSchema  = gdeclareNamedSchema opts (Proxy :: Proxy f) s
+---------------------------
+---------------------------
+---------------------------
+
+gsumSchema
+  :: (AllNullaryConstructors f, GSumToSchema f)
+  => SchemaOptions -> Proxy f -> Declare (Definitions Schema) NamedSchema
+gsumSchema opts proxy
+    | allNullaryToStringTag opts || sumEncoding opts == UntaggedValue
+    , Just names <- nullaryConstructorsNames proxy
+    = pure $ unnamed mempty
+        & type_ ?~ OpenApiString
+        & enum_ ?~ map (String . T.pack . constructorTagModifier opts) names
+    | otherwise = do
+        schemas <- gsumToSchema opts proxy
+        case schemas of
+          [Inline single] -> pure $ unnamed single
+          -- We use laxer 'anyOf' property instead of 'oneOf'.
+          -- The latter does not work for, e.g. @data Foo = Foo | NotFoo String@
+          -- with sumEncoding=UntaggedValue, as both branches match.
+          _ -> pure $ unnamed $ mempty & anyOf ?~ schemas
+
+instance (GProductSchemas (f :*: g)) => GToSchema (C1 c (f :*: g)) where
+  gdeclareNamedSchema opts _ = gdeclareNamedSchema opts $ Proxy @(f :*: g)
+
+instance (GToSchema (S1 s f)) => GToSchema (C1 c (S1 s f)) where
+  gdeclareNamedSchema opts _ = gdeclareNamedSchema opts $ Proxy @(S1 s f)
+
+instance GToSchema (C1 c U1) where
+  gdeclareNamedSchema opts _ = gdeclareNamedSchema opts $ Proxy @U1
+
+instance (GProductSchemas (f :*: g)) => GToSchema (f :*: g) where
+  gdeclareNamedSchema opts _ = gproductSchema opts $ Proxy @(f :*: g)
+
+instance (GToSchema f) => GToSchema (S1 ('MetaSel 'Nothing src ss ds) f) where
+  gdeclareNamedSchema opts _ = gdeclareNamedSchema opts $ Proxy @f
+
+instance (GToSchema f, GProductSchemas (S1 ('MetaSel ('Just sel) src ss ds) f))
+  => GToSchema (S1 ('MetaSel ('Just sel) src ss ds) f) where
+  gdeclareNamedSchema opts _ =
+    if unwrapUnaryRecords opts
+    then gdeclareNamedSchema opts $ Proxy @f
+    else gproductSchema opts $ Proxy @(S1 ('MetaSel ('Just sel) src ss ds) f)
+
+instance ToSchema c => GToSchema (K1 i c) where
+  gdeclareNamedSchema _ _ = declareNamedSchema (Proxy :: Proxy c)
+
+instance GToSchema U1 where
+  gdeclareNamedSchema _ _ = pure (NamedSchema Nothing nullarySchema)
 
 gdeclareSchemaRef :: GToSchema a => SchemaOptions -> Proxy a -> Declare (Definitions Schema) (Referenced Schema)
 gdeclareSchemaRef opts proxy = do
@@ -983,87 +1017,91 @@ gdeclareSchemaRef opts proxy = do
       known <- looks (InsOrdHashMap.member name)
       when (not known) $ do
         declare [(name, schema)]
-        void $ gdeclareNamedSchema opts proxy mempty
+        void $ gdeclareNamedSchema opts proxy
       return $ Ref (Reference name)
     _ -> Inline <$> gdeclareSchema opts proxy
 
-appendItem :: Referenced Schema -> Maybe OpenApiItems -> Maybe OpenApiItems
-appendItem x Nothing = Just (OpenApiItemsArray [x])
-appendItem x (Just (OpenApiItemsArray xs)) = Just (OpenApiItemsArray (xs ++ [x]))
-appendItem _ _ = error "GToSchema.appendItem: cannot append to OpenApiItemsObject"
+-- * Helper machinery for products
 
-withFieldSchema :: forall proxy s f. (Selector s, GToSchema f) =>
-  SchemaOptions -> proxy s f -> Bool -> Schema -> Declare (Definitions Schema) Schema
-withFieldSchema opts _ isRequiredField schema = do
-  ref <- gdeclareSchemaRef opts (Proxy :: Proxy f)
-  return $
-    if T.null fname
-      then schema
-        & type_ ?~ OpenApiArray
-        & items %~ appendItem ref
-        & maxItems %~ Just . maybe 1 (+1)   -- increment maxItems
-        & minItems %~ Just . maybe 1 (+1)   -- increment minItems
-      else schema
-        & type_ ?~ OpenApiObject
-        & properties . at fname ?~ ref
-        & if isRequiredField
-            then required %~ (++ [fname])
-            else id
-  where
-    fname = T.pack (fieldLabelModifier opts (selName (Proxy3 :: Proxy3 s f p)))
+gproductSchema
+  :: (GProductSchemas f) => SchemaOptions -> Proxy f -> Declare (Definitions Schema) NamedSchema
+gproductSchema opts proxy = do
+  (recordFields, productFields) <- gproductSchemas opts proxy
+  let sz = toInteger $ length productFields
+      insProp (name, _, schema) = at name ?~ schema
+      requiredProps = do
+        (name, required, _) <- recordFields
+        guard required
+        pure name
+  pure $ unnamed $ case recordFields of
+    [] -> mempty
+      & type_ ?~ OpenApiArray
+      & items ?~ OpenApiItemsArray productFields
+      & maxItems ?~ sz
+      & minItems ?~ sz
+    _ -> mempty
+      & type_ ?~ OpenApiObject
+      & additionalProperties .~ noAdditionalProperties opts
+      & properties .~ foldl' (flip insProp) mempty recordFields
+      & required .~ requiredProps
 
--- | Optional record fields.
-instance {-# OVERLAPPING #-} (Selector s, ToSchema c) => GToSchema (S1 s (K1 i (Maybe c))) where
-  gdeclareNamedSchema opts _ = fmap unnamed . withFieldSchema opts (Proxy2 :: Proxy2 s (K1 i (Maybe c))) False
+type RecordField = (T.Text, Bool, Referenced Schema)
 
--- | Record fields.
-instance {-# OVERLAPPABLE #-} (Selector s, GToSchema f) => GToSchema (S1 s f) where
-  gdeclareNamedSchema opts _ = fmap unnamed . withFieldSchema opts (Proxy2 :: Proxy2 s f) True
+class GProductSchemas f where
+  -- | Collect fields names
+  gproductSchemas
+    :: SchemaOptions
+    -> Proxy f
+    -> Declare (Definitions Schema) ([RecordField], [Referenced Schema])
 
-instance ToSchema c => GToSchema (K1 i c) where
-  gdeclareNamedSchema _ _ _ = declareNamedSchema (Proxy :: Proxy c)
+instance (GProductSchemas f, GProductSchemas g) => GProductSchemas (f :*: g) where
+  gproductSchemas opts _ = do
+    l <- gproductSchemas opts (Proxy @f)
+    r <- gproductSchemas opts (Proxy @g)
+    pure (l <> r)
 
-instance ( GSumToSchema f
-         , GSumToSchema g
-         ) => GToSchema (f :+: g)
-   where
-  -- Aeson does not unwrap unary record in sum types.
-  gdeclareNamedSchema opts = gdeclareNamedSumSchema (opts { unwrapUnaryRecords = False })
+instance (IsMaybe c, Selector s, ToSchema c) => GProductSchemas (S1 s (K1 i c)) where
+  gproductSchemas opts _ = do
+    schema <- declareSchemaRef (Proxy @c)
+    pure $ case selName $ Proxy3 @s @_ @_ of
+      "" -> ([], [schema])
+      name ->
+        ( [ ( T.pack $ fieldLabelModifier opts name
+            , not $ isMaybe $ Proxy @c
+            , schema
+            )
+          ]
+        , []
+        )
 
-gdeclareNamedSumSchema :: GSumToSchema f => SchemaOptions -> Proxy f -> Schema -> Declare (Definitions Schema) NamedSchema
-gdeclareNamedSumSchema opts proxy _
-  | allNullaryToStringTag opts && allNullary = pure $ unnamed $ mempty
-      & type_ ?~ OpenApiString
-      & enum_ ?~ map (String . fst) sumSchemas
-  | otherwise = do
-    (schemas, _) <- runWriterT declareSumSchema
-    return $ unnamed $ mempty
-      & oneOf ?~ (snd <$> schemas)
-  where
-    declareSumSchema = gsumToSchema opts proxy
-    (sumSchemas, All allNullary) = undeclare (runWriterT declareSumSchema)
+instance (GProductSchemas f) => GProductSchemas (C1 c f) where
+  gproductSchemas opts _ = gproductSchemas opts $ Proxy @f
 
-type AllNullary = All
+instance GProductSchemas U1 where
+  gproductSchemas _ _ = pure ([], [Inline nullarySchema])
 
-class GSumToSchema (f :: Type -> Type)  where
-  gsumToSchema :: SchemaOptions -> Proxy f -> WriterT AllNullary (Declare (Definitions Schema)) [(T.Text, Referenced Schema)]
+-- This will go away with latest aeson
+class IsMaybe a where
+  isMaybe :: Proxy a -> Bool
 
-instance (GSumToSchema f, GSumToSchema g) => GSumToSchema (f :+: g) where
-  gsumToSchema opts _ =
-    (<>) <$> gsumToSchema opts (Proxy :: Proxy f) <*> gsumToSchema opts (Proxy :: Proxy g)
+instance {-# OVERLAPPABLE #-} IsMaybe a where
+  isMaybe _ = False
+
+instance {-# OVERLAPPING #-} IsMaybe (Maybe a) where
+  isMaybe _ = True
+
+-- * Helper machinery for sums
 
 -- | Convert one component of the sum to schema, to be later combined with @oneOf@.
-gsumConToSchemaWith :: forall c f. (GToSchema (C1 c f), Constructor c) =>
-  Maybe (Referenced Schema) -> SchemaOptions -> Proxy (C1 c f) -> (T.Text, Referenced Schema)
-gsumConToSchemaWith ref opts _ = (tag, withTitle)
+gsumConToSchemaWith :: forall c f. (Constructor c) =>
+  Maybe (Referenced Schema) -> SchemaOptions -> Proxy (C1 c f) -> Referenced Schema
+gsumConToSchemaWith ref opts _ = case schema of
+  Inline sub -> Inline $ sub
+  -- Give sub-schemas @title@ attribute with constructor name, if none present.
+  -- This will look prettier in swagger-ui.
+    & title %~ (<|> Just (T.pack constructorName))
+  s -> s
   where
-    -- Give sub-schemas @title@ attribute with constructor name, if none present.
-    -- This will look prettier in swagger-ui.
-    withTitle = case schema of
-      Inline sub -> Inline $ sub
-        & title %~ (<|> Just (T.pack constructorName))
-      s -> s
-
     schema = case sumEncoding opts of
       TaggedObject tagField contentsField ->
         case ref of
@@ -1071,13 +1109,14 @@ gsumConToSchemaWith ref opts _ = (tag, withTitle)
           -- to the record, as Aeson does it.
           Just (Inline sub) | sub ^. type_ == Just OpenApiObject && isRecord -> Inline $ sub
             & required <>~ [T.pack tagField]
-            & properties . at (T.pack tagField) ?~ Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [String tag])
+            & properties . at (T.pack tagField) ?~ tagString
 
           -- If it is not a record, we need to put subschema into "contents" field.
           _ | not isRecord -> Inline $ mempty
             & type_ ?~ OpenApiObject
+            & additionalProperties .~ noAdditionalProperties opts
             & required .~ [T.pack tagField]
-            & properties . at (T.pack tagField) ?~ Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [String tag])
+            & properties . at (T.pack tagField) ?~ tagString
               -- If constructor is nullary, there is no content.
             & case ref of
                 Just r -> (properties . at (T.pack contentsField) ?~ r) . (required <>~ [T.pack contentsField])
@@ -1087,46 +1126,83 @@ gsumConToSchemaWith ref opts _ = (tag, withTitle)
           _ -> Inline $ mempty
             & allOf ?~ [Inline $ mempty
               & type_ ?~ OpenApiObject
+              & additionalProperties .~ noAdditionalProperties opts
               & required .~ (T.pack tagField : if isRecord then [] else [T.pack contentsField])
-              & properties . at (T.pack tagField) ?~ Inline (mempty & type_ ?~ OpenApiString & enum_ ?~ [String tag])]
+              & properties . at (T.pack tagField) ?~ tagString]
             & if isRecord
                  then allOf . _Just <>~ [refOrNullary]
                  else allOf . _Just <>~ [Inline $ mempty & type_ ?~ OpenApiObject & properties . at (T.pack contentsField) ?~ refOrNullary]
       UntaggedValue -> refOrEnum -- Aeson encodes nullary constructors as strings in this case.
       ObjectWithSingleField -> Inline $ mempty
         & type_ ?~ OpenApiObject
+        -- This is how "aeson" behaves
+        & additionalProperties ?~ AdditionalPropertiesAllowed False
         & required .~ [tag]
         & properties . at tag ?~ refOrNullary
-      TwoElemArray -> error "unrepresentable in OpenAPI 3"
+      TwoElemArray -> Inline $ mempty
+        & type_ ?~ OpenApiArray
+        & items ?~ OpenApiItemsArray [tagString, fromMaybe (Inline nullarySchema) ref]
+        & minItems ?~ 2
+        & maxItems ?~ 2
 
     constructorName = conName (Proxy3 :: Proxy3 c f p)
     tag = T.pack (constructorTagModifier opts constructorName)
+    tagString = Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ [String tag]
     isRecord = conIsRecord (Proxy3 :: Proxy3 c f p)
     refOrNullary = fromMaybe (Inline nullarySchema) ref
-    refOrEnum = fromMaybe (Inline $ mempty & type_ ?~ OpenApiString & enum_ ?~ [String tag]) ref
+    refOrEnum = fromMaybe tagString ref
 
-gsumConToSchema :: (GToSchema (C1 c f), Constructor c) =>
-  SchemaOptions -> Proxy (C1 c f) -> Declare (Definitions Schema) [(T.Text, Referenced Schema)]
-gsumConToSchema opts proxy = do
-  ref <- gdeclareSchemaRef opts proxy
-  return [gsumConToSchemaWith (Just ref) opts proxy]
+class GSumToSchema (f :: Type -> Type) where
+  gsumToSchema :: SchemaOptions -> Proxy f -> Declare (Definitions Schema) [Referenced Schema]
+
+instance (GSumToSchema f, GSumToSchema g) => GSumToSchema (f :+: g) where
+  gsumToSchema opts _ = (<>)
+    <$> gsumToSchema opts (Proxy @f)
+    <*> gsumToSchema opts (Proxy @g)
 
 instance {-# OVERLAPPABLE #-} (Constructor c, GToSchema f) => GSumToSchema (C1 c f) where
   gsumToSchema opts proxy = do
-    tell (All False)
-    lift $ gsumConToSchema opts proxy
+    let unwrap = case sumEncoding opts of
+          -- This is how "Aeson" behaves
+          TaggedObject{} -> False
+          _ -> unwrapUnaryRecords opts
+    ref <- gdeclareSchemaRef opts{unwrapUnaryRecords = unwrap} (Proxy @f)
+    return [gsumConToSchemaWith (Just ref) opts proxy]
 
-instance (Constructor c, Selector s, GToSchema f) => GSumToSchema (C1 c (S1 s f)) where
+instance {-# OVERLAPPING #-} (Constructor c) => GSumToSchema (C1 c U1) where
   gsumToSchema opts proxy = do
-    tell (All False)
-    lift $ gsumConToSchema opts proxy
-
-instance Constructor c => GSumToSchema (C1 c U1) where
-  gsumToSchema opts proxy = pure $ (:[]) $ gsumConToSchemaWith Nothing opts proxy
+    return [gsumConToSchemaWith Nothing opts proxy]
 
 data Proxy2 a b = Proxy2
 
 data Proxy3 a b c = Proxy3
+
+proxy3 :: Proxy (f a b) -> Proxy3 f a b
+proxy3 _ = Proxy3
+
+class AllNullaryConstructors f where
+  -- | Collect constructors names if all of them are nullary
+  nullaryConstructorsNames :: Proxy f -> Maybe [String]
+
+instance (AllNullaryConstructors f, AllNullaryConstructors g)
+  => AllNullaryConstructors (f :+: g) where
+  nullaryConstructorsNames _ = do
+    l <- nullaryConstructorsNames (Proxy @f)
+    r <- nullaryConstructorsNames (Proxy @g)
+    Just (l <> r)
+
+instance {-# OVERLAPPABLE #-} AllNullaryConstructors (C1 c f) where
+  nullaryConstructorsNames _ = Nothing
+
+instance {-# OVERLAPPING #-} (Constructor c) => AllNullaryConstructors (C1 c U1) where
+  nullaryConstructorsNames _ = Just [conName $ Proxy3 @c @_ @_]
+
+noAdditionalProperties :: SchemaOptions -> Maybe AdditionalProperties
+noAdditionalProperties opts = do
+  -- Missing 'additionalProperties' serve as set to 'true',
+  -- so we set this only when 'rejectUnknownFields' is 'false'.
+  guard $ rejectUnknownFields opts
+  Just $ AdditionalPropertiesAllowed False
 
 {- $setup
 >>> import Data.OpenApi
